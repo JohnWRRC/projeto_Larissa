@@ -1,3 +1,5 @@
+
+# Autor: John Wesley Ribeiro
 from qgis.core import (
     QgsVectorLayer, QgsWkbTypes, QgsFeature, QgsGeometry,
     QgsField, QgsVectorFileWriter, QgsProject, QgsPointXY,
