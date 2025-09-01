@@ -25,16 +25,7 @@ if layer.wkbType() != QgsWkbTypes.Point:
 if "direct" not in [f.name() for f in layer.fields()]:
     raise Exception("O shapefile de pontos precisa ter o campo 'direct'.")
 
-# Mapeamento das posições
-mapa_direct = {
-    "1": "Frente",
-    "2": "Lateral direita",
-    "3": "Fundo",
-    "4": "Lateral esquerda",
-    "5": "Fechamento"  # será ignorado
-}
-
-# Criar camada de saída em memória 
+# Criar camada de saída em memória
 crs = layer.crs().toWkt()
 out_layer = QgsVectorLayer("LineString?crs=" + crs, "laterais_lotes", "memory")
 pr = out_layer.dataProvider()
@@ -61,24 +52,50 @@ if not polygons_layer.isValid():
 index = QgsSpatialIndex(polygons_layer.getFeatures())
 
 # --------------------------
+# Função para definir posicao
+def classificar_conexao(p1_val, p2_val):
+    lateral = {
+        "1": "Frente",
+        "2": "Lateral direita",
+        "3": "Fundo",
+        "4": "Lateral esquerda"
+    }
+
+    # Normaliza valores maiúsculos
+    p1_val = str(p1_val).upper()
+    p2_val = str(p2_val).upper()
+
+    # Se algum ponto for X, é LinhaApoio
+    if "X" in [p1_val, p2_val]:
+        return "LinhaApoio"
+
+    # Se for ramificação (ex: 2a…2f), pegamos o número principal
+    match1 = re.match(r"(\d)", p1_val)
+    match2 = re.match(r"(\d)", p2_val)
+    if match1 and match2:
+        n1, n2 = match1.group(1), match2.group(1)
+        # Se p1 e p2 são número principal ou ramificação do mesmo número → mesma lateral
+        if n1 == n2:
+            return lateral[n1]
+        # Se é a última ramificação → próximo número
+        if p1_val.endswith("f") and int(n1) % 4 + 1 == int(n2):
+            return lateral[n1]
+        # Se números diferentes → segue a direção do número inicial
+        if n1 != n2:
+            return lateral[n1]
+    return "Desconhecido"
+
+# --------------------------
 # 3) CRIAR LINHAS COM GEO LINK
 lote_atual = []
 for i in range(len(pontos) - 1):
     p1 = pontos[i]
     p2 = pontos[i + 1]
 
-    direct_val = str(p1["direct"])
+    p1_val = str(p1["direct"]).upper()
+    p2_val = str(p2["direct"]).upper()
 
-    # Verifica se é número válido
-    chave_match = re.match(r"\d+", direct_val)
-    if not chave_match:
-        continue
-
-    chave = chave_match.group()
-    if chave not in mapa_direct or chave == "5":
-        continue
-
-    posicao = mapa_direct[chave]
+    posicao = classificar_conexao(p1_val, p2_val)
 
     # Criar linha entre p1 e p2
     x1, y1 = p1.geometry().asPoint()
@@ -87,11 +104,11 @@ for i in range(len(pontos) - 1):
 
     linha = QgsFeature(out_layer.fields())
     linha.setGeometry(QgsGeometry.fromPolylineXY([QgsPointXY(x1, y1), QgsPointXY(x2, y2)]))
-    linha.setAttributes([direct_val, posicao, comprimento, None])
+    linha.setAttributes([f"{p1_val}->{p2_val}", posicao, comprimento, None])
     lote_atual.append(linha)
 
-    # Quando chega em lateral direita/esquerda → fecha lote
-    if posicao in ["Lateral direita", "Lateral esquerda"]:
+    # Quando chega em lateral direita/esquerda/fundo → fecha lote
+    if posicao in ["Lateral direita", "Lateral esquerda", "Fundo", "Frente"]:
         coords = []
         for lf in lote_atual:
             geom = lf.geometry()
@@ -124,15 +141,12 @@ for i in range(len(pontos) - 1):
 # --------------------------
 # 4) REMOVER SOBREPOSIÇÕES EXATAS
 final_feats = []
-for i, feat1 in enumerate(novas_feats):
-    geom1 = feat1.geometry()
-    keep = True
-    for j, feat2 in enumerate(novas_feats):
-        if i != j and geom1.equals(feat2.geometry()):
-            keep = False
-            break
-    if keep:
-        final_feats.append(feat1)
+seen = set()
+for feat in novas_feats:
+    wkt = feat.geometry().asWkt()
+    if wkt not in seen:
+        seen.add(wkt)
+        final_feats.append(feat)
 
 # --------------------------
 # 5) ADICIONAR NA CAMADA DE SAÍDA
